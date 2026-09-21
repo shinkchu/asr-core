@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 标点恢复（可选）
 
-本地后端的原始输出没有标点。启用 `punct-sherpa` 并在引擎配置中声明标点模型后，所有 final 自动经过标点后处理：
+标点是否原生输出因家族而异：SenseVoice、Qwen3-ASR、FunASR-Nano 原生输出已带标点；流式 zipformer、离线 transducer、Paraformer、FireRedASR2 的原始输出没有标点。后一类家族启用 `punct-sherpa` 并在引擎配置中声明标点模型后，所有 final 自动经过标点后处理：
 
 ```rust,no_run
 use asr_core::*;
@@ -208,8 +208,10 @@ cargo run --no-default-features --features backend-sherpa --example transcribe_f
 # Paraformer、FireRedASR-CTC 与无标记 SenseVoice 共享扁平布局，无法自动区分，须用 transcribe 示例的 JSON 配置显式指定家族）
 cargo run --no-default-features --features backend-sherpa,vad-silero --example transcribe_file -- MODEL_DIR speech.wav --vad silero_vad.onnx
 
-# 本地转写 + 标点恢复（第三个参数为标点模型目录）
-cargo run --no-default-features --features backend-sherpa,punct-sherpa --example transcribe_file -- MODEL_DIR speech.wav PUNCT_DIR
+# 本地转写 + 标点恢复（第三个位置参数为标点模型目录；流式 zipformer 去掉 --vad 即可）。
+# 仅原始输出无标点的家族需要——流式 zipformer、离线 transducer、Paraformer、FireRedASR2；
+# SenseVoice、Qwen3-ASR、FunASR-Nano 原生输出已带标点，无需配置
+cargo run --no-default-features --features backend-sherpa,vad-silero,punct-sherpa --example transcribe_file -- MODEL_DIR speech.wav PUNCT_DIR --vad silero_vad.onnx
 
 # 本地转写 + 热词偏置（英文模型需归档自带 bpe.vocab）
 cargo run --no-default-features --features backend-sherpa --example transcribe_file -- MODEL_DIR speech.wav --hotwords "语音识别,张三"
@@ -225,6 +227,6 @@ cargo test --all-features --all-targets
 cargo test --no-default-features
 ```
 
-通用示例从 JSON 读取 `EngineConfig`，从 `ASR_API_KEY` 注入凭据。麦克风示例按 Enter 完整停止。云端运行会向配置的服务上传输入音频。
+通用示例从 JSON 读取 `EngineConfig`，从 `ASR_API_KEY` 注入凭据。transcribe_file 的实时进度与分段转写输出到 stderr（分段定稿即打印，流式部分结果在交互式终端上单行刷新），完整转写只写 stdout，重定向互不干扰。麦克风示例按 Enter 完整停止。云端运行会向配置的服务上传输入音频。
 
 详细说明：[架构](https://github.com/appstore/asr-core/blob/master/docs/architecture.md)、[后端配置](https://github.com/appstore/asr-core/blob/master/docs/providers.md)、[验证记录](https://github.com/appstore/asr-core/blob/master/docs/validation.md)。真实模型测试单独标记 `ignored`；不在普通测试中下载模型或调用付费服务。未入 CI fixture 的大模型回归（Qwen3-ASR、FunASR-Nano、FireRedASR2 等）还需设 `ASR_RUN_LARGE_MODEL_TEST=1` 才实际执行，区别见[验证记录](https://github.com/appstore/asr-core/blob/master/docs/validation.md)。

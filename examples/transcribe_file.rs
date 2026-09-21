@@ -1,18 +1,27 @@
+//! 转录本地音频文件。识别过程实时反馈到 stderr：每段定稿立即打印（带
+//! 时间戳），流式模型的部分结果在交互式终端上单行原地刷新；完整转写
+//! 仍只在结束后打印到 stdout，重定向管道拿到的是干净结果。
+
 use asr_core::{
     audio::read_wav_pcm16,
     utils::models::{detect, LocalModel},
-    BiasPhrase, Engine, EngineConfig, EngineOptions, OfflineConfig, OfflineFamily, PunctConfig,
-    SessionOptions, StreamingConfig, TransducerBiasConfig, VadConfig,
+    AudioChunk, BiasPhrase, Engine, EngineConfig, EngineOptions, OfflineConfig, OfflineFamily,
+    PunctConfig, SessionOptions, StreamingConfig, Subscription, TransducerBiasConfig, Update,
+    VadConfig,
 };
 use std::{
     error::Error,
+    io::IsTerminal,
     path::PathBuf,
     time::{Duration, Instant},
 };
 fn main() -> Result<(), Box<dyn Error>> {
+    let started = Instant::now();
     let mut positional: Vec<String> = Vec::new();
     let mut hotwords: Vec<BiasPhrase> = Vec::new();
     let mut vad: Option<PathBuf> = None;
+    let mut max_duration_secs: Option<u64> = None;
+    let mut deadline_secs: Option<u64> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--hotwords" {
@@ -22,13 +31,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         } else if arg == "--vad" {
             vad = Some(PathBuf::from(args.next().ok_or("--vad requires a value")?));
+        } else if arg == "--max-duration" {
+            max_duration_secs = Some(flag_seconds("--max-duration", args.next())?);
+        } else if arg == "--deadline" {
+            deadline_secs = Some(flag_seconds("--deadline", args.next())?);
         } else {
             positional.push(arg);
         }
     }
     if positional.len() != 2 && positional.len() != 3 {
         return Err(
-            "usage: transcribe_file MODEL_DIRECTORY AUDIO.wav [PUNCTUATION_MODEL_DIRECTORY] [--hotwords WORD1,WORD2,...] [--vad silero_vad.onnx]"
+            "usage: transcribe_file MODEL_DIRECTORY AUDIO.wav [PUNCTUATION_MODEL_DIRECTORY] [--hotwords WORD1,WORD2,...] [--vad silero_vad.onnx] [--max-duration SECONDS] [--deadline SECONDS]"
                 .into(),
         );
     }
@@ -64,13 +77,125 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
         }
     };
+    eprintln!("加载模型…");
     let engine = Engine::prepare(config, EngineOptions::default())?;
     let mut options = SessionOptions::new(audio.spec);
-    options.max_duration = Duration::from_secs(60 * 60);
+    // 会话时长上限：默认取库内硬顶 24 小时（coordinator 24 小时校验），
+    // 示例自身不叠加人为限制。
+    options.max_duration = Duration::from_secs(max_duration_secs.unwrap_or(24 * 60 * 60));
     options.max_transcript_bytes = 2 * 1024 * 1024;
-    let result = engine.transcribe(&audio, options, Instant::now() + Duration::from_secs(30))?;
-    println!("{}", result.transcript.text());
+    // 整体截止：默认按"音频时长 + 5 分钟"兜底；离线识别通常快于实时，
+    // 机器较慢时可用 --deadline 显式放宽。
+    let audio_secs = (audio.samples.len() as u64).div_ceil(u64::from(audio.spec.sample_rate));
+    let deadline =
+        Instant::now() + Duration::from_secs(deadline_secs.unwrap_or(audio_secs + 5 * 60));
+    eprintln!("音频 {audio_secs} 秒，开始识别…");
+    // 会话级流程替代 Engine::transcribe：先订阅事件流再喂音频，段定稿与
+    // 部分结果经渲染线程实时到达终端，而不是等整段转写结束才输出。
+    let session = engine.start(options)?;
+    let subscription = session
+        .subscribe()
+        .ok_or("session subscription slot unavailable")?;
+    let display = std::thread::spawn(move || render_live(subscription));
+    let input = session.input();
+    // 与 Engine::transcribe 相同的 100ms 分块；识别慢于喂入时 push_wait 在
+    // 队列水位上背压等待，不丢音频。
+    let chunk_frames = (audio.spec.sample_rate as usize / 10).max(1);
+    for samples in audio.samples.chunks(chunk_frames) {
+        let chunk = AudioChunk {
+            samples: samples.to_vec(),
+            spec: audio.spec,
+        };
+        if let Err(error) = input.push_wait(chunk, deadline) {
+            session.cancel();
+            display.join().map_err(|_| "event display failed")?;
+            return Err(error.into());
+        }
+    }
+    let result = session.finish(deadline);
+    // 结束前定稿的段可能还排在订阅队列里：先 join 渲染线程再打印统计，
+    // 保证 stderr 上的输出顺序。
+    display.join().map_err(|_| "event display failed")?;
+    let outcome = result?;
+    eprintln!(
+        "识别完成：{} 段，总耗时 {:.1} 秒",
+        outcome.transcript.segments.len(),
+        started.elapsed().as_secs_f64()
+    );
+    println!("{}", outcome.transcript.text());
     Ok(())
+}
+
+/// 订阅事件 → stderr。段定稿立即成行打印；流式部分结果仅在交互式终端
+/// 上渲染（单行原地刷新），重定向时跳过部分结果、只保留定稿段，避免
+/// 转义序列和中间文本污染落盘内容。
+fn render_live(mut subscription: Subscription) {
+    let interactive = std::io::stderr().is_terminal();
+    // 终端上是否有未换行的部分结果行，等待被段定稿或结束清行。
+    let mut live_line = false;
+    while let Some(update) = subscription.recv() {
+        match update {
+            Update::Partial { text, .. } if interactive => {
+                eprint!("\r\x1b[K{}", partial_tail(&text));
+                live_line = true;
+            }
+            Update::Segment(segment) => {
+                if live_line {
+                    eprint!("\r\x1b[K");
+                    live_line = false;
+                }
+                let text = segment.text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                match (segment.start_seconds, segment.end_seconds) {
+                    (Some(start), Some(end)) => {
+                        eprintln!("[{} - {}] {}", stamp(start), stamp(end), text)
+                    }
+                    _ => eprintln!("{text}"),
+                }
+            }
+            Update::Reset(_) | Update::Phase(_) => {}
+            _ => {}
+        }
+    }
+    if live_line {
+        eprint!("\r\x1b[K");
+    }
+}
+
+/// 部分结果单行尾部截断：折行后 `\r` + 清行只能清掉最后一行、留下残影，
+/// 超过宽度时仅保留尾部并加省略号。
+fn partial_tail(text: &str) -> String {
+    const WIDTH: usize = 60;
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= WIDTH {
+        return text.to_string();
+    }
+    let mut tail = String::from("…");
+    tail.extend(chars[chars.len() - WIDTH..].iter());
+    tail
+}
+
+/// 秒 → "mm:ss.ss" 段时间戳。
+fn stamp(seconds: f64) -> String {
+    format!(
+        "{:02}:{:05.2}",
+        seconds.div_euclid(60.0) as u64,
+        seconds.rem_euclid(60.0)
+    )
+}
+
+/// "--flag SECONDS" 解析：值缺失、非正整数均按 flag 名报错。
+fn flag_seconds(flag: &str, value: Option<String>) -> Result<u64, Box<dyn Error>> {
+    let value = value.ok_or_else(|| format!("{flag} requires a value"))?;
+    let secs = value
+        .parse()
+        .map_err(|_| format!("{flag} expects a whole number of seconds, got {value:?}"))?;
+    if secs == 0 {
+        return Err(format!("{flag} must be greater than zero").into());
+    }
+    Ok(secs)
 }
 
 /// 目录布局 → 离线家族。流式家族已在调用方分流，这里只裁决可判定的
