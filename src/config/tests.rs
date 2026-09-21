@@ -243,3 +243,50 @@ fn openai_realtime_rejects_blank_api_keys_like_dashscope() {
         .validate_parameters()
         .expect("non-blank API key must be accepted");
 }
+
+#[test]
+fn execution_provider_defaults_and_round_trips() {
+    let streaming: StreamingConfig = serde_json::from_str(r#"{"model_dir":"/m"}"#).unwrap();
+    let offline: OfflineConfig =
+        serde_json::from_str(r#"{"model_dir":"/m","family":"SenseVoice","vad":{"model":"/v"}}"#)
+            .unwrap();
+    assert_eq!(streaming.provider, ExecutionProvider::Cpu);
+    assert_eq!(offline.provider, ExecutionProvider::Cpu);
+    assert_eq!(StreamingConfig::new("/m").provider, ExecutionProvider::Cpu);
+    assert_eq!(
+        OfflineConfig::new("/m", OfflineFamily::SenseVoice, VadConfig::new("/v")).provider,
+        ExecutionProvider::Cpu
+    );
+
+    for (name, provider) in [
+        ("cpu", ExecutionProvider::Cpu),
+        ("cuda", ExecutionProvider::Cuda),
+        ("coreml", ExecutionProvider::CoreMl),
+    ] {
+        assert_eq!(name.parse::<ExecutionProvider>().unwrap(), provider);
+        let mut streaming = streaming.clone();
+        streaming.provider = provider;
+        let json = serde_json::to_value(&streaming).unwrap();
+        assert_eq!(json["provider"], name);
+        assert_eq!(
+            serde_json::from_value::<StreamingConfig>(json).unwrap(),
+            streaming
+        );
+        let mut offline = offline.clone();
+        offline.provider = provider;
+        let json = serde_json::to_value(&offline).unwrap();
+        assert_eq!(json["provider"], name);
+        assert_eq!(
+            serde_json::from_value::<OfflineConfig>(json).unwrap(),
+            offline
+        );
+    }
+    assert!("gpu".parse::<ExecutionProvider>().is_err());
+    assert!(
+        serde_json::from_str::<StreamingConfig>(r#"{"model_dir":"/m","provider":"gpu"}"#).is_err()
+    );
+    assert!(serde_json::from_str::<OfflineConfig>(
+        r#"{"model_dir":"/m","family":"SenseVoice","vad":{"model":"/v"},"provider":"cdua"}"#
+    )
+    .is_err());
+}

@@ -56,6 +56,98 @@ Streaming 读取目录中的 encoder/decoder/joiner/tokens；encoder、joiner �
 
 SenseVoice 不再固定中文，默认 auto。Paraformer 不接受语言覆盖。VAD 参数可配置并限制有效范围；模型资产由宿主下载、校验并通过 `VadConfig` 显式传入，库不提供下载器。
 
+### GPU / 硬件加速
+
+`StreamingConfig::provider` 和 `OfflineConfig::provider` 使用公共枚举 `ExecutionProvider`：
+
+| Rust | JSON / CLI | 平台 |
+|---|---|---|
+| `Cpu` | `"cpu"` | 默认 |
+| `Cuda` | `"cuda"` | NVIDIA，Linux / Windows |
+| `CoreMl` | `"coreml"` | Apple |
+
+缺省为 CPU；未知名字在解析时拒绝，不兼容的平台在 `Engine::prepare` 和
+`utils::precheck::validate` 中以 `UnsupportedCapability` 拒绝。`provider` 只控制
+识别器，VAD 与标点恢复继续使用 CPU。Rust 结构体字面量需要增加 `provider` 字段；
+通过 `new()` 构造及已有 JSON 配置不受影响。
+
+```json
+{"Offline":{"model_dir":"/path/to/fp32-model","family":"SenseVoice","vad":{"model":"/path/to/silero_vad.onnx"},"provider":"cuda"}}
+```
+
+**CUDA 部署：**
+
+1. 准备与所解析的 `sherpa-onnx-sys` 版本、目标系统和架构一致的 GPU 原生库
+   （本仓库当前锁定 1.13.8），并安装与该构建匹配的 NVIDIA 驱动、CUDA、cuDNN。
+   参见[上游 Linux GPU 安装说明](https://k2-fsa.github.io/sherpa/onnx/install/linux.html)。
+2. 启用 `backend-sherpa-shared`。它包含 `backend-sherpa` 并选择共享链接；
+   不启用时桌面构建仍使用原有静态链接。若应用还直接依赖 `sherpa-onnx`，应关闭
+   该依赖的默认 `static` feature，避免 Cargo feature 合并后与 `shared` 冲突。
+3. 在构建前将 `SHERPA_ONNX_LIB_DIR` 指向 GPU 发行包的 `lib` 目录。单独启用
+   shared feature 不会自动下载 CUDA 包。部署时还需携带其 ONNX Runtime provider
+   动态库，并让运行时能找到 CUDA/cuDNN 依赖。
+
+```sh
+export SHERPA_ONNX_LIB_DIR=/absolute/path/to/sherpa-onnx-gpu/lib
+# Linux：包含 provider 动态库和 CUDA/cuDNN 的实际目录须在加载器搜索路径中。
+export LD_LIBRARY_PATH="$SHERPA_ONNX_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cargo run --release --features backend-sherpa-shared,vad-silero \
+  --example transcribe_file -- /path/to/model audio.wav \
+  --vad /path/to/silero_vad.onnx --provider cuda
+```
+
+Windows 使用相应 GPU 包，并将原生库目录及 CUDA/cuDNN DLL 目录加入 `PATH`。
+自定义库路径与链接行为见[上游 Rust 安装说明](https://k2-fsa.github.io/sherpa/onnx/rust-api/advanced-install.html)。
+
+**CoreML 部署：**使用包含 CoreML EP 的 ONNX Runtime 和 sherpa-onnx Apple 构建，
+自定义共享库同样可通过上述 feature 与 `SHERPA_ONNX_LIB_DIR` 接入，再传
+`--provider coreml`。CoreML 自行分配 CPU/GPU/Neural Engine，不能将其理解成强制
+只用 GPU；依赖条件见[CoreML EP 文档](https://onnxruntime.ai/docs/execution-providers/CoreML-ExecutionProvider.html)。
+
+macOS 共享模式还需要配置**最终可执行文件的运行库搜索路径**。
+`SHERPA_ONNX_LIB_DIR` 只负责构建时选库，不能代替运行时设置；当前上游 sys
+传入的 rpath 链接参数不会传播到消费本库的最终应用。`cargo run/test` 会设置
+动态库搜索环境，因此它们能运行，并不代表直接启动或打包后的程序也能运行。
+
+开发时可显式指定原生库目录，直接运行编译产物：
+
+```sh
+export SHERPA_ONNX_LIB_DIR=/absolute/path/to/sherpa-onnx-coreml/lib
+cargo build --features backend-sherpa-shared,vad-silero --example transcribe_file
+DYLD_LIBRARY_PATH="$SHERPA_ONNX_LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+  ./target/debug/examples/transcribe_file /path/to/model audio.wav \
+  --vad /path/to/silero_vad.onnx --provider coreml
+```
+
+发布命令行应用时，应在**应用目标**上设置 rpath，并将原生 dylib 及其非系统
+依赖一起打包。例如，以下命令让本仓库示例从可执行文件所在目录加载动态库：
+
+```sh
+cargo rustc --release --features backend-sherpa-shared,vad-silero \
+  --example transcribe_file -- -C link-arg=-Wl,-rpath,@executable_path
+# 将 transcribe_file 和所需 dylib 一起复制到发行目录，再直接启动验证。
+# 当前上游构建脚本会将这些 dylib 复制到 target/release/examples/。
+```
+
+消费本库的应用需对自己的 binary target 设置链接参数（如将上例的
+`--example transcribe_file` 改为 `--bin your-app`），不能只在依赖库上设置。
+macOS `.app` 通常将 dylib 放在 `Contents/Frameworks`，最终可执行文件使用
+`@executable_path/../Frameworks` 作为 rpath，并完成嵌入依赖与应用的签名。
+发行验证须从复制后的目录直接启动，清除 `DYLD_LIBRARY_PATH` 和
+`DYLD_FALLBACK_LIBRARY_PATH`，避免依赖开发机环境。可用 `otool -L` 检查依赖，
+`otool -l` 检查最终可执行文件的 `LC_RPATH`。
+
+**模型和验证：**使用针对目标 provider 验证过的模型，首次测试建议准备独立的 FP32
+模型目录；目录发现仍保留原有 int8 优先规则，同时放入 int8 和 FP32 并不会因选择
+GPU 自动切换权重。量化算子支持与实际加速效果须逐模型验证。
+
+当前 sherpa-onnx Rust API 不提供实际 provider 查询，本库预检只保证平台和配置
+有效。[上游原生实现](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/sherpa-onnx/csrc/session.cc)
+在 provider 不可用时可能回退 CPU，部分算子也可留在 CPU。
+请检查原生日志，结合 NVIDIA `nvidia-smi` 或 Apple Instruments 观察实际设备活动，
+并用相同音频比较 CPU/GPU 的转写、加载耗时和预热后的推理耗时。配置接线测试不代表
+目标 GPU/模型已通过实测。
+
 ### 热词
 
 热词是 transducer 与提示注入式家族（Qwen3-ASR / FunASR-Nano）的能力，推理期按 token 匹配加分或注入提示，无需重训。transducer 配置热词后解码切换到 `modified_beam_search`（开销约为 greedy 的 2~4 倍，仅热词路径承担）；Qwen3-ASR / FunASR-Nano 热词注入生成提示，无解码开销。
@@ -102,13 +194,13 @@ URL 前缀 `https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-
 
 ## JSON 示例
 
-本地流式（`punctuation`、`bias`、`num_threads` 可选）：
+本地流式（`punctuation`、`bias`、`num_threads`、`provider` 可选）：
 
 ```json
 {"Streaming":{"model_dir":"/path/to/model","punctuation":{"model":"/path/to/punctuation"},"bias":{"phrases":[{"phrase":"语音识别","score":null},{"phrase":"张三","score":3.5}],"default_score":2.0,"modeling_unit":null},"num_threads":2}}
 ```
 
-离线（`num_threads` 同样可选）：
+离线（`num_threads`、`provider` 同样可选）：
 
 ```json
 {"Offline":{"model_dir":"/path/to/model","family":"SenseVoice","vad":{"model":"/path/to/silero_vad.onnx","threshold":0.5,"min_silence":0.5,"min_speech":0.25,"max_speech":15.0},"num_threads":2}}

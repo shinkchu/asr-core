@@ -243,6 +243,46 @@ fn default_num_threads() -> usize {
     DEFAULT_NUM_THREADS
 }
 
+/// Requested execution provider for local recognition. The native sherpa-onnx
+/// and ONNX Runtime libraries must support the selected provider. Upstream may
+/// fall back to CPU; this value is not a report of actual device utilization.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionProvider {
+    #[default]
+    Cpu,
+    /// NVIDIA CUDA on Linux or Windows; requires a CUDA-enabled native build.
+    Cuda,
+    /// Apple CoreML; may schedule work on CPU, GPU, or Neural Engine.
+    CoreMl,
+}
+
+impl ExecutionProvider {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Cuda => "cuda",
+            Self::CoreMl => "coreml",
+        }
+    }
+}
+
+impl std::str::FromStr for ExecutionProvider {
+    type Err = crate::AsrError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "cpu" => Ok(Self::Cpu),
+            "cuda" => Ok(Self::Cuda),
+            "coreml" => Ok(Self::CoreMl),
+            _ => Err(crate::AsrError::invalid(
+                "provider must be cpu, cuda, or coreml",
+            )),
+        }
+    }
+}
+
 /// Transducer-only decoding bias. Configuring it selects modified beam search
 /// and enables per-session [`SpeechHints`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -268,6 +308,9 @@ impl TransducerBiasConfig {
 #[serde(deny_unknown_fields)]
 pub struct StreamingConfig {
     pub model_dir: PathBuf,
+    /// Recognizer execution provider; VAD and punctuation use CPU.
+    #[serde(default)]
+    pub provider: ExecutionProvider,
     pub punctuation: Option<PunctConfig>,
     /// Transducer decoding bias; also enables per-session speech hints.
     pub bias: Option<TransducerBiasConfig>,
@@ -281,6 +324,7 @@ impl StreamingConfig {
     pub fn new(model_dir: impl Into<PathBuf>) -> Self {
         Self {
             model_dir: model_dir.into(),
+            provider: ExecutionProvider::default(),
             punctuation: None,
             bias: None,
             num_threads: default_num_threads(),
@@ -292,6 +336,9 @@ impl StreamingConfig {
 #[serde(deny_unknown_fields)]
 pub struct OfflineConfig {
     pub model_dir: PathBuf,
+    /// Recognizer execution provider; VAD and punctuation use CPU.
+    #[serde(default)]
+    pub provider: ExecutionProvider,
     pub family: OfflineFamily,
     pub language: Option<String>,
     pub vad: VadConfig,
@@ -310,6 +357,7 @@ impl OfflineConfig {
     pub fn new(model_dir: impl Into<PathBuf>, family: OfflineFamily, vad: VadConfig) -> Self {
         Self {
             model_dir: model_dir.into(),
+            provider: ExecutionProvider::default(),
             family,
             language: None,
             vad,

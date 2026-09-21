@@ -84,6 +84,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 没有自动重试、协议猜测或后端回退。HTTP API 根地址可包含 `/v1/` 和代理前缀，接口追加 `audio/transcriptions`。第三方需要实现音频协议，仅聊天接口兼容不够。配置不序列化密钥，Debug 输出也隐藏密钥。
 
+## GPU / 硬件加速
+
+本地流式与离线识别可通过 `provider` 选择执行设备，默认 `cpu`，旧 JSON 配置可继续使用：
+
+```rust
+use asr_core::{ExecutionProvider, StreamingConfig};
+let mut config = StreamingConfig::new("/path/to/model");
+config.provider = ExecutionProvider::Cuda; // NVIDIA；Apple 使用 CoreMl
+```
+
+`OfflineConfig` 使用相同字段；文件示例支持 `--provider cpu|cuda|coreml`。
+CUDA 需要匹配的 GPU 原生库，启用 `backend-sherpa-shared` 并在构建前设置
+`SHERPA_ONNX_LIB_DIR`。CoreML 需要含 CoreML 的 Apple 原生库。选择 provider
+并不保证全部计算在 GPU 上执行，上游可能回退 CPU；VAD 与标点仍使用 CPU。
+完整部署步骤、模型选择和验证方式见[后端配置](https://github.com/appstore/asr-core/blob/master/docs/providers.md#gpu--硬件加速)。
+
 ## 标点恢复（可选）
 
 标点是否原生输出因家族而异：SenseVoice、Qwen3-ASR、FunASR-Nano 原生输出已带标点；流式 zipformer、离线 transducer、Paraformer、FireRedASR2 的原始输出没有标点。后一类家族启用 `punct-sherpa` 并在引擎配置中声明标点模型后，所有 final 自动经过标点后处理：

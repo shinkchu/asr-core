@@ -5,9 +5,9 @@
 use asr_core::{
     audio::read_wav_pcm16,
     utils::models::{detect, LocalModel},
-    AudioChunk, BiasPhrase, Engine, EngineConfig, EngineOptions, OfflineConfig, OfflineFamily,
-    PunctConfig, SessionOptions, StreamingConfig, Subscription, TransducerBiasConfig, Update,
-    VadConfig, DEFAULT_NUM_THREADS, MAX_NUM_THREADS,
+    AudioChunk, BiasPhrase, Engine, EngineConfig, EngineOptions, ExecutionProvider, OfflineConfig,
+    OfflineFamily, PunctConfig, SessionOptions, StreamingConfig, Subscription,
+    TransducerBiasConfig, Update, VadConfig, DEFAULT_NUM_THREADS, MAX_NUM_THREADS,
 };
 use std::{
     error::Error,
@@ -23,6 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut max_duration_secs: Option<u64> = None;
     let mut deadline_secs: Option<u64> = None;
     let mut threads: Option<usize> = None;
+    let mut provider = ExecutionProvider::default();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--hotwords" {
@@ -36,6 +37,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             max_duration_secs = Some(flag_seconds("--max-duration", args.next())?);
         } else if arg == "--deadline" {
             deadline_secs = Some(flag_seconds("--deadline", args.next())?);
+        } else if arg == "--provider" {
+            provider = args.next().ok_or("--provider requires a value")?.parse()?;
         } else if arg == "--threads" {
             threads = Some(flag_threads(args.next())?);
         } else {
@@ -44,7 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if positional.len() != 2 && positional.len() != 3 {
         return Err(
-            "usage: transcribe_file MODEL_DIRECTORY AUDIO.wav [PUNCTUATION_MODEL_DIRECTORY] [--hotwords WORD1,WORD2,...] [--vad silero_vad.onnx] [--max-duration SECONDS] [--deadline SECONDS] [--threads N]"
+            "usage: transcribe_file MODEL_DIRECTORY AUDIO.wav [PUNCTUATION_MODEL_DIRECTORY] [--hotwords WORD1,WORD2,...] [--vad silero_vad.onnx] [--max-duration SECONDS] [--deadline SECONDS] [--threads N] [--provider cpu|cuda|coreml]"
                 .into(),
         );
     }
@@ -65,6 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // 引擎级热词：启用 modified_beam_search 并对所有会话生效。
                 bias: (!hotwords.is_empty()).then(|| TransducerBiasConfig::new(hotwords)),
                 num_threads: threads,
+                provider,
             })
         }
         family => {
@@ -80,10 +84,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 transducer_bias: None,
                 prompt_hints: None,
                 num_threads: threads,
+                provider,
             })
         }
     };
-    eprintln!("加载模型…");
+    eprintln!("加载模型（请求 provider: {}）…", provider.as_str());
     let engine = Engine::prepare(config, EngineOptions::default())?;
     let mut options = SessionOptions::new(audio.spec);
     // 会话时长上限：默认取库内硬顶 24 小时（coordinator 24 小时校验），

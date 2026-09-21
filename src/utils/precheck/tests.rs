@@ -485,3 +485,37 @@ fn precheck_fails_exactly_where_prepare_fails_for_offline_family_rules() {
     assert_precheck_matches_prepare(EngineConfig::Offline(config));
     drop(funasr_guard);
 }
+
+#[cfg(feature = "backend-sherpa")]
+#[test]
+fn incompatible_providers_fail_before_model_access() {
+    let providers = [
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        crate::ExecutionProvider::Cuda,
+        #[cfg(not(target_vendor = "apple"))]
+        crate::ExecutionProvider::CoreMl,
+    ];
+    for provider in providers {
+        let mut config = crate::StreamingConfig::new("/nonexistent-model");
+        config.provider = provider;
+        let config = EngineConfig::Streaming(config);
+        let error = validate(&config).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::UnsupportedCapability);
+        assert!(error.message.contains(provider.as_str()));
+        assert_precheck_matches_prepare(config);
+        #[cfg(feature = "vad-silero")]
+        {
+            let mut config = crate::OfflineConfig::new(
+                "/nonexistent-model",
+                crate::OfflineFamily::SenseVoice,
+                crate::VadConfig::new("/nonexistent-vad"),
+            );
+            config.provider = provider;
+            let config = EngineConfig::Offline(config);
+            let error = validate(&config).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::UnsupportedCapability);
+            assert!(error.message.contains(provider.as_str()));
+            assert_precheck_matches_prepare(config);
+        }
+    }
+}

@@ -125,11 +125,13 @@ jobs:
       # libraries are cached separately: restored after rust-cache, and
       # saved by an explicit step so rust-cache's post-step cleanup can
       # never archive the pruned directory.
+      # Each job caches its own static/shared set; an older static-only
+      # cache must not mask pruned shared-library directories.
       - name: Restore sherpa-onnx prebuilt libraries
         uses: actions/cache/restore@v6
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
 
       - name: Test standalone native features
         shell: bash
@@ -142,7 +144,8 @@ jobs:
             "backend-openai-http,vad-silero" \
             "backend-sherpa" \
             "backend-sherpa,vad-silero" \
-            "backend-sherpa,punct-sherpa"
+            "backend-sherpa,punct-sherpa" \
+            "backend-sherpa-shared,vad-silero,punct-sherpa"
           do
             cargo test \
               --locked \
@@ -166,7 +169,7 @@ jobs:
         continue-on-error: true
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
 
   native:
     name: Native (macOS ARM)
@@ -207,7 +210,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
 
       - name: Test all features
         run: cargo test --locked --all-features --all-targets
@@ -215,12 +218,36 @@ jobs:
       - name: Test all-feature documentation
         run: cargo test --locked --all-features --doc
 
+      - name: Test relocated macOS shared executable outside Cargo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # rpath must be attached to the final executable, not its dependencies.
+          cargo rustc --locked --features backend-sherpa-shared,vad-silero \
+            --example transcribe_file -- -C link-arg=-Wl,-rpath,@executable_path
+
+          stage_dir="$(mktemp -d)"
+          trap 'rm -rf "$stage_dir"' EXIT
+          cp target/debug/examples/transcribe_file "$stage_dir/"
+          cp -L target/debug/examples/*.dylib "$stage_dir/"
+          (
+            unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
+            cd "$stage_dir"
+            # No arguments: reaching the usage error proves main was entered.
+            status=0
+            ./transcribe_file > startup.log 2>&1 || status=$?
+            cat startup.log
+            test "$status" -eq 1
+            grep -q 'usage: transcribe_file' startup.log
+          )
+
       - name: Save sherpa-onnx prebuilt libraries
         uses: actions/cache/save@v6
         continue-on-error: true
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
 
   native-linux:
     name: Native (Linux)
@@ -270,7 +297,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
 
       - name: Test capture
         run: |
@@ -309,7 +336,7 @@ jobs:
         continue-on-error: true
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
 
   package:
     name: Package

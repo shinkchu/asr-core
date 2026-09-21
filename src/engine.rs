@@ -71,6 +71,7 @@ fn load(
                 &config.model_dir,
                 config.bias.as_ref(),
                 config.num_threads,
+                config.provider,
             )?;
             let punctuator = load_punctuator(&config.punctuation)?;
             let supports_session_hints = config.bias.is_some();
@@ -104,6 +105,7 @@ fn load(
                 config.transducer_bias.as_ref(),
                 config.prompt_hints.as_ref(),
                 config.num_threads,
+                config.provider,
             )?;
             let punctuator = load_punctuator(&config.punctuation)?;
             let supports_session_hints =

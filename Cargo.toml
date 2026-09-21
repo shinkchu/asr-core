@@ -21,6 +21,8 @@ all-features = true
 default = []
 capture-cpal = ["dep:cpal", "dep:ringbuf"]
 backend-sherpa = ["dep:sherpa-onnx"]
+# Shared linking permits externally supplied CUDA/CoreML native libraries.
+backend-sherpa-shared = ["backend-sherpa", "sherpa-onnx/shared"]
 vad-silero = ["dep:sherpa-onnx"]
 punct-sherpa = ["backend-sherpa"]
 model-download = ["dep:reqwest", "reqwest/blocking", "dep:sha2"]
@@ -45,7 +47,9 @@ cpal = { version = "0.18", optional = true }
 ringbuf = { version = "0.4", optional = true }
 
 # local engines: streaming zipformer / offline (SenseVoice, Paraformer, FireRedASR2 等) / silero VAD
-sherpa-onnx = { version = "1.13", optional = true }
+# sherpa-onnx-sys defaults to static on desktop when neither linking feature is
+# enabled. Avoid forcing `static`, which would conflict with optional `shared`.
+sherpa-onnx = { version = "1.13", optional = true, default-features = false }
 
 # cloud realtime ASR websocket (DashScope Paraformer protocol)
 tokio-tungstenite = { version = "0.30", optional = true, default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }

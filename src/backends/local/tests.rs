@@ -14,7 +14,12 @@ fn ambiguous_model_candidates_surface_as_invalid_model() {
         std::fs::write(dir.path().join(name), [1u8; 8]).unwrap();
     }
 
-    let error = match load_stream(dir.path(), None, DEFAULT_NUM_THREADS) {
+    let error = match load_stream(
+        dir.path(),
+        None,
+        DEFAULT_NUM_THREADS,
+        ExecutionProvider::Cpu,
+    ) {
         Ok(_) => panic!("ambiguous model layout must fail before native initialization"),
         Err(error) => error,
     };
@@ -37,7 +42,12 @@ fn empty_bpe_vocabulary_surfaces_as_invalid_model() {
     }
     std::fs::write(dir.path().join("bpe.vocab"), []).unwrap();
 
-    let error = match load_stream(dir.path(), None, DEFAULT_NUM_THREADS) {
+    let error = match load_stream(
+        dir.path(),
+        None,
+        DEFAULT_NUM_THREADS,
+        ExecutionProvider::Cpu,
+    ) {
         Ok(_) => panic!("empty bpe.vocab must fail before native initialization"),
         Err(error) => error,
     };
@@ -61,6 +71,7 @@ fn offline_family_precheck_fires_before_native_initialization() {
         None,
         None,
         DEFAULT_NUM_THREADS,
+        ExecutionProvider::Cpu,
     ) {
         Ok(_) => panic!("marked tokens must reject a Paraformer configuration"),
         Err(error) => error,
@@ -76,6 +87,7 @@ fn offline_family_precheck_fires_before_native_initialization() {
         None,
         None,
         DEFAULT_NUM_THREADS,
+        ExecutionProvider::Cpu,
     ) {
         Ok(_) => panic!("marked tokens must reject a FireRedAsrCtc configuration"),
         Err(error) => error,
@@ -94,10 +106,46 @@ fn offline_family_precheck_fires_before_native_initialization() {
         None,
         None,
         DEFAULT_NUM_THREADS,
+        ExecutionProvider::Cpu,
     ) {
         Ok(_) => panic!("missing decoder must fail before native initialization"),
         Err(error) => error,
     };
     assert_eq!(error.kind, ErrorKind::InvalidModel);
     assert!(error.message.contains("decoder"), "{error:?}");
+}
+
+/// Inspect the actual native configurations without loading fake ONNX weights.
+#[test]
+fn requested_provider_reaches_native_recognizer_configs() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["encoder.onnx", "decoder.onnx", "joiner.onnx", "model.onnx"] {
+        std::fs::write(dir.path().join(name), [1u8; 8]).unwrap();
+    }
+    std::fs::write(dir.path().join("tokens.txt"), "foo 1\n").unwrap();
+    let providers = [
+        ExecutionProvider::Cpu,
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        ExecutionProvider::Cuda,
+        #[cfg(target_vendor = "apple")]
+        ExecutionProvider::CoreMl,
+    ];
+    for provider in providers {
+        let (config, _, _) = stream_config(dir.path(), None, 4, provider).unwrap();
+        assert_eq!(
+            config.model_config.provider.as_deref(),
+            Some(provider.as_str())
+        );
+        assert_eq!(config.model_config.num_threads, 4);
+        #[cfg(feature = "vad-silero")]
+        for family in [OfflineFamily::Paraformer, OfflineFamily::Transducer] {
+            let (config, _, _) =
+                offline_config(dir.path(), family, None, None, None, 4, provider).unwrap();
+            assert_eq!(
+                config.model_config.provider.as_deref(),
+                Some(provider.as_str())
+            );
+            assert_eq!(config.model_config.num_threads, 4);
+        }
+    }
 }

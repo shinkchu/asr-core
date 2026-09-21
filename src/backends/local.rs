@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     session::driver::{Driver, ResultSink},
-    AsrError, TransducerBiasConfig,
+    AsrError, ExecutionProvider, TransducerBiasConfig,
 };
 #[cfg(feature = "vad-silero")]
 use crate::{OfflineFamily, SpeechHints};
@@ -17,7 +17,53 @@ pub(crate) fn load_stream(
     dir: &Path,
     bias: Option<&TransducerBiasConfig>,
     num_threads: usize,
+    provider: ExecutionProvider,
 ) -> Result<(Arc<OnlineRecognizer>, Option<String>, HotwordVocabulary), AsrError> {
+    let (config, words, vocabulary) = stream_config(dir, bias, num_threads, provider)?;
+    let recognizer = OnlineRecognizer::create(&config).ok_or_else(|| {
+        model_error(format!(
+            "failed to initialize streaming model with provider {}",
+            provider.as_str()
+        ))
+    })?;
+    Ok((Arc::new(recognizer), words, vocabulary))
+}
+
+#[cfg(feature = "vad-silero")]
+pub(crate) fn load_offline(
+    dir: &Path,
+    family: OfflineFamily,
+    language: Option<&str>,
+    bias: Option<&TransducerBiasConfig>,
+    prompt_hints: Option<&SpeechHints>,
+    num_threads: usize,
+    provider: ExecutionProvider,
+) -> Result<(Arc<OfflineRecognizer>, Option<String>, HotwordVocabulary), AsrError> {
+    let (config, words, vocabulary) = offline_config(
+        dir,
+        family,
+        language,
+        bias,
+        prompt_hints,
+        num_threads,
+        provider,
+    )?;
+    let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
+        model_error(format!(
+            "failed to initialize offline model with provider {}",
+            provider.as_str()
+        ))
+    })?;
+    Ok((Arc::new(recognizer), words, vocabulary))
+}
+
+fn stream_config(
+    dir: &Path,
+    bias: Option<&TransducerBiasConfig>,
+    num_threads: usize,
+    provider: ExecutionProvider,
+) -> Result<(OnlineRecognizerConfig, Option<String>, HotwordVocabulary), AsrError> {
+    super::precheck::validate_provider(provider)?;
     let files = super::model_layout::find_model_files(dir).map_err(model_error)?;
     let mut c = OnlineRecognizerConfig::default();
     c.model_config.transducer.encoder = Some(files.encoder.to_string_lossy().into_owned());
@@ -25,7 +71,7 @@ pub(crate) fn load_stream(
     c.model_config.transducer.joiner = Some(files.joiner.to_string_lossy().into_owned());
     c.model_config.tokens = Some(files.tokens.to_string_lossy().into_owned());
     c.model_config.num_threads = num_threads as i32;
-    c.model_config.provider = Some("cpu".into());
+    c.model_config.provider = Some(provider.as_str().into());
     let mut vocabulary = HotwordVocabulary::empty();
     let words = match bias {
         Some(bias) => {
@@ -47,29 +93,29 @@ pub(crate) fn load_stream(
     c.rule1_min_trailing_silence = 1.0;
     c.rule2_min_trailing_silence = 2.0;
     c.rule3_min_utterance_length = 20.0;
-    let recognizer = OnlineRecognizer::create(&c)
-        .ok_or_else(|| model_error("failed to initialize streaming model"))?;
-    Ok((Arc::new(recognizer), words, vocabulary))
+    Ok((c, words, vocabulary))
 }
 // 离线路径的执行模型是"VAD 切段 → 逐段离线识别"（Offline driver 在
 // start 构建 VAD、push/drain 消费 VAD 段），运行时依赖 vad-silero，
 // 与 backend-sherpa 并非天然绑定而是本 crate 的设计选择。保持该门控：
 // sherpa-only 构建不去编译一条必然不可用的路径，也防止未来被误删。
 #[cfg(feature = "vad-silero")]
-pub(crate) fn load_offline(
+fn offline_config(
     dir: &Path,
     family: OfflineFamily,
     language: Option<&str>,
     bias: Option<&TransducerBiasConfig>,
     prompt_hints: Option<&SpeechHints>,
     num_threads: usize,
-) -> Result<(Arc<OfflineRecognizer>, Option<String>, HotwordVocabulary), AsrError> {
+    provider: ExecutionProvider,
+) -> Result<(OfflineRecognizerConfig, Option<String>, HotwordVocabulary), AsrError> {
+    super::precheck::validate_provider(provider)?;
     // 家族能力规则（language/bias/prompt_hints 的取舍）唯一归宿在
     // backends::precheck，Engine::prepare 与 utils::precheck 共用。
     super::precheck::validate_family_parameters(family, language, bias, prompt_hints)?;
     let mut c = OfflineRecognizerConfig::default();
     c.model_config.num_threads = num_threads as i32;
-    c.model_config.provider = Some("cpu".into());
+    c.model_config.provider = Some(provider.as_str().into());
     let mut words = None;
     let mut vocabulary = HotwordVocabulary::empty();
     match family {
@@ -156,9 +202,7 @@ pub(crate) fn load_offline(
                 Some(files.decoder.to_string_lossy().into_owned());
         }
     }
-    let recognizer = OfflineRecognizer::create(&c)
-        .ok_or_else(|| model_error("failed to initialize offline model"))?;
-    Ok((Arc::new(recognizer), words, vocabulary))
+    Ok((c, words, vocabulary))
 }
 pub(crate) struct Streaming {
     recognizer: Arc<OnlineRecognizer>,

@@ -45,6 +45,7 @@ fn offline_config(dir: impl Into<PathBuf>, family: OfflineFamily, vad: VadConfig
         punctuation: None,
         transducer_bias: None,
         prompt_hints: None,
+        provider: asr_core::ExecutionProvider::Cpu,
         num_threads: DEFAULT_NUM_THREADS,
     }
 }
@@ -164,6 +165,7 @@ fn streaming_chunk_boundaries_tail_and_silence() {
         model_dir: dir.clone(),
         punctuation: None,
         bias: None,
+        provider: asr_core::ExecutionProvider::Cpu,
         // 非默认线程数：真实模型层确认参数端到端传到 sherpa-onnx 且识别正常。
         num_threads: 4,
     }))
@@ -192,6 +194,7 @@ fn session_hotwords_fail_without_engine_hotwords() {
         model_dir: dir.clone(),
         punctuation: None,
         bias: None,
+        provider: asr_core::ExecutionProvider::Cpu,
         num_threads: DEFAULT_NUM_THREADS,
     }))
     .unwrap();
@@ -215,6 +218,7 @@ fn streaming_hotwords_engine_level_and_session_override() {
         model_dir: dir.clone(),
         punctuation: None,
         bias: Some(TransducerBiasConfig::new(Vec::new())),
+        provider: asr_core::ExecutionProvider::Cpu,
         num_threads: DEFAULT_NUM_THREADS,
     }))
     .unwrap();
@@ -250,6 +254,7 @@ fn streaming_hotwords_engine_level_and_session_override() {
         bias: Some(TransducerBiasConfig::new(vec![BiasPhrase::new(
             word.clone(),
         )])),
+        provider: asr_core::ExecutionProvider::Cpu,
         num_threads: DEFAULT_NUM_THREADS,
     }))
     .unwrap();
@@ -530,6 +535,7 @@ fn streaming_punctuation_ct_transformer() {
         model_dir: dir.clone(),
         punctuation: Some(PunctConfig::new(std::env::var("ASR_PUNCT_MODEL").unwrap())),
         bias: None,
+        provider: asr_core::ExecutionProvider::Cpu,
         num_threads: DEFAULT_NUM_THREADS,
     }))
     .unwrap();
@@ -558,6 +564,7 @@ fn streaming_punctuation_en_cnn_bilstm() {
             std::env::var("ASR_PUNCT_EN_MODEL").unwrap(),
         )),
         bias: None,
+        provider: asr_core::ExecutionProvider::Cpu,
         num_threads: DEFAULT_NUM_THREADS,
     }))
     .unwrap();

@@ -29,6 +29,28 @@ fn validate_num_threads(num_threads: usize) -> Result<(), AsrError> {
     Ok(())
 }
 
+/// Platform checks only: native provider availability depends on the linked
+/// runtime and is not exposed by sherpa-onnx's Rust API.
+pub(crate) fn validate_provider(provider: crate::ExecutionProvider) -> Result<(), AsrError> {
+    use crate::ExecutionProvider;
+    let supported = match provider {
+        ExecutionProvider::Cpu => true,
+        ExecutionProvider::Cuda => cfg!(any(target_os = "linux", target_os = "windows")),
+        ExecutionProvider::CoreMl => cfg!(target_vendor = "apple"),
+    };
+    if !supported {
+        return Err(AsrError::new(
+            crate::ErrorKind::UnsupportedCapability,
+            "configuration",
+            format!(
+                "provider {} is unsupported on this platform",
+                provider.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Matches the stage `punct::create` reports for the same layout failure, so
 /// precheck does not change observable error semantics.
 /// Cheap precheck of a [`StreamingConfig`]: hotword bias syntax, model
@@ -38,6 +60,7 @@ fn validate_num_threads(num_threads: usize) -> Result<(), AsrError> {
 #[cfg(feature = "backend-sherpa")]
 pub(crate) fn streaming(config: &StreamingConfig) -> Result<(), AsrError> {
     validate_num_threads(config.num_threads)?;
+    validate_provider(config.provider)?;
     let files = super::model_layout::find_model_files(&config.model_dir).map_err(model_error)?;
     if let Some(bias) = &config.bias {
         super::hotwords::prepare_bias(bias, &files)?;
@@ -131,6 +154,7 @@ pub(crate) fn validate_family_parameters(
 #[cfg(all(feature = "backend-sherpa", feature = "vad-silero"))]
 pub(crate) fn offline(config: &crate::OfflineConfig) -> Result<(), AsrError> {
     validate_num_threads(config.num_threads)?;
+    validate_provider(config.provider)?;
     // The cheap half of prepare's `vad::preflight`; the native detector is
     // still built once in prepare.
     super::vad::validate(&config.vad)?;
