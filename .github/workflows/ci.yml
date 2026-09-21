@@ -1,0 +1,263 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  features:
+    name: Features (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core
+            args: --no-default-features
+          - name: model-download
+            args: --no-default-features --features model-download
+          - name: openai-http
+            args: --no-default-features --features backend-openai-http
+          - name: dashscope
+            args: --no-default-features --features backend-dashscope
+          - name: openai-realtime
+            args: --no-default-features --features backend-openai-realtime
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: feature-${{ matrix.name }}
+
+      - name: Test targets
+        run: cargo test --locked ${{ matrix.args }} --all-targets
+
+      - name: Test documentation
+        run: cargo test --locked ${{ matrix.args }} --doc
+
+  native:
+    name: Native (macOS Intel)
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-macos-intel
+          # sherpa-onnx stores downloaded native libraries under target/.
+          # rust-cache prunes those libraries while leaving their directory
+          # behind, which makes sherpa-onnx skip the next download.
+          cache-targets: false
+
+      - name: Test standalone native features
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          for features in \
+            "capture-cpal" \
+            "capture-cpal,backend-openai-http" \
+            "backend-openai-http,vad-silero" \
+            "backend-sherpa" \
+            "backend-sherpa,vad-silero" \
+            "backend-sherpa,punct-sherpa"
+          do
+            cargo test \
+              --locked \
+              --no-default-features \
+              --features "$features" \
+              --all-targets
+
+            cargo test \
+              --locked \
+              --no-default-features \
+              --features "$features" \
+              --doc
+          done
+
+      - name: Clippy all features
+        run: cargo clippy --locked --all-features --all-targets -- -D warnings
+
+      - name: Test all features
+        run: cargo test --locked --all-features --all-targets
+
+      - name: Test all-feature documentation
+        run: cargo test --locked --all-features --doc
+
+  native-linux:
+    name: Native (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-linux
+          # See the macOS job: target caching can leave an incomplete
+          # sherpa-onnx prebuilt directory and break the native link step.
+          cache-targets: false
+
+      - name: Test capture
+        run: |
+          cargo test \
+            --locked \
+            --no-default-features \
+            --features capture-cpal \
+            --all-targets
+
+      - name: Test local native features
+        run: |
+          cargo test \
+            --locked \
+            --no-default-features \
+            --features backend-sherpa,vad-silero,punct-sherpa \
+            --all-targets
+
+      - name: Test all features
+        run: |
+          cargo test \
+            --locked \
+            --all-features \
+            --all-targets
+
+      - name: Clippy all features
+        run: |
+          cargo clippy \
+            --locked \
+            --all-features \
+            --all-targets \
+            -- \
+            -D warnings
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: package
+
+      - name: Verify default feature set
+        run: cargo test --locked --all-targets
+
+      - name: Verify crate package
+        run: cargo package --locked
+
+      - name: Show packaged files
+        run: cargo package --locked --list
+
+  required:
+    name: Required
+    if: always()
+    runs-on: ubuntu-latest
+
+    needs:
+      - format
+      - features
+      - native
+      - native-linux
+      - package
+
+    steps:
+      - name: Verify required jobs
+        env:
+          FORMAT_RESULT: ${{ needs.format.result }}
+          FEATURES_RESULT: ${{ needs.features.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+          NATIVE_LINUX_RESULT: ${{ needs.native-linux.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+        run: |
+          echo "format=$FORMAT_RESULT"
+          echo "features=$FEATURES_RESULT"
+          echo "native=$NATIVE_RESULT"
+          echo "native-linux=$NATIVE_LINUX_RESULT"
+          echo "package=$PACKAGE_RESULT"
+
+          test "$FORMAT_RESULT" = "success"
+          test "$FEATURES_RESULT" = "success"
+          test "$NATIVE_RESULT" = "success"
+          test "$NATIVE_LINUX_RESULT" = "success"
+          test "$PACKAGE_RESULT" = "success"

@@ -1,0 +1,5 @@
+.zcodeignore
+.DS_Store
+.workbuddy-ai
+/target
+.zcode

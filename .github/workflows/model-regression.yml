@@ -1,0 +1,144 @@
+name: Model Regression
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  models:
+    name: Official model regression
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: model-regression-macos-intel
+
+      - name: Cache model archives
+        uses: actions/cache@v6
+        with:
+          path: .model-cache
+          key: asr-core-models-${{ hashFiles('docs/model-fixtures.json') }}
+
+      - name: Download official model archives
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p .model-cache
+
+          python3 - <<'PY' > /tmp/model-downloads.tsv
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("docs/model-fixtures.json").read_text())
+          root = data["source_root"]
+          punct_root = data["punct_root"]
+          archives = data["archives"]
+
+          print(f"streaming.tar.bz2\t{root}{archives['streaming.tar.bz2']}")
+          print(f"streaming-bilingual.tar.bz2\t{root}{archives['streaming-bilingual.tar.bz2']}")
+          print(f"transducer-zh.tar.bz2\t{root}{archives['transducer-zh.tar.bz2']}")
+          print(f"sensevoice.tar.bz2\t{root}{archives['sensevoice.tar.bz2']}")
+          print(f"paraformer.tar.bz2\t{root}{archives['paraformer.tar.bz2']}")
+          print(f"silero_vad.onnx\t{root}silero_vad.onnx")
+          print(f"punct-zh-en.tar.bz2\t{punct_root}{archives['punct-zh-en.tar.bz2']}")
+          print(f"punct-en.tar.bz2\t{punct_root}{archives['punct-en.tar.bz2']}")
+          PY
+
+          while IFS=$'\t' read -r target url; do
+            if [ ! -f ".model-cache/$target" ]; then
+              curl \
+                --fail \
+                --location \
+                --retry 3 \
+                --retry-delay 2 \
+                "$url" \
+                --output ".model-cache/$target"
+            fi
+          done < /tmp/model-downloads.tsv
+
+      - name: Verify archive checksums
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("docs/model-fixtures.json").read_text())
+          expected = {item["path"]: item["sha256"] for item in data["files"]}
+
+          for name in (
+              "streaming.tar.bz2",
+              "streaming-bilingual.tar.bz2",
+              "transducer-zh.tar.bz2",
+              "sensevoice.tar.bz2",
+              "paraformer.tar.bz2",
+              "silero_vad.onnx",
+              "punct-zh-en.tar.bz2",
+              "punct-en.tar.bz2",
+          ):
+              path = Path(".model-cache") / name
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if digest != expected[name]:
+                  raise SystemExit(
+                      f"{name}: checksum mismatch\n"
+                      f"expected {expected[name]}\n"
+                      f"actual   {digest}"
+                  )
+              print(f"{name}: OK")
+          PY
+
+      - name: Extract models
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf .models
+          mkdir -p .models
+
+          tar -xjf .model-cache/streaming.tar.bz2 -C .models
+          tar -xjf .model-cache/streaming-bilingual.tar.bz2 -C .models
+          tar -xjf .model-cache/transducer-zh.tar.bz2 -C .models
+          tar -xjf .model-cache/sensevoice.tar.bz2 -C .models
+          tar -xjf .model-cache/paraformer.tar.bz2 -C .models
+          tar -xjf .model-cache/punct-zh-en.tar.bz2 -C .models
+          tar -xjf .model-cache/punct-en.tar.bz2 -C .models
+          cp .model-cache/silero_vad.onnx .models/
+
+      - name: Run model regression
+        env:
+          ASR_STREAMING_MODEL: ${{ github.workspace }}/.models/sherpa-onnx-streaming-zipformer-en-2023-06-26
+          ASR_STREAMING_BILINGUAL_MODEL: ${{ github.workspace }}/.models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+          ASR_OFFLINE_TRANSDUCER_MODEL: ${{ github.workspace }}/.models/sherpa-onnx-conformer-zh-stateless2-2023-05-23
+          ASR_SENSEVOICE_MODEL: ${{ github.workspace }}/.models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
+          ASR_PARAFORMER_MODEL: ${{ github.workspace }}/.models/sherpa-onnx-paraformer-zh-2023-09-14
+          ASR_PARAFORMER_WAV: ${{ github.workspace }}/.models/sherpa-onnx-paraformer-zh-2023-09-14/test_wavs/0.wav
+          ASR_VAD_MODEL: ${{ github.workspace }}/.models/silero_vad.onnx
+          ASR_PUNCT_MODEL: ${{ github.workspace }}/.models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8
+          ASR_PUNCT_EN_MODEL: ${{ github.workspace }}/.models/sherpa-onnx-online-punct-en-2024-08-06
+        # Large-model / non-CI-fixture regression tests (Qwen3-ASR ~880 MB,
+        # FunASR-Nano ~842 MB, FireRedASR2 ~742 MB / 1.2 GB, and the
+        # sense-voice funasr-nano variant) self-skip with a "skipped" line
+        # unless ASR_RUN_LARGE_MODEL_TEST=1; CI deliberately does not set it.
+        # They stay runnable locally with the ASR_*_MODEL vars documented in
+        # docs/validation.md. Adding a new large model needs no workflow
+        # change — just the same in-test guard.
+        run: cargo test --locked --all-features --test model_regression -- --ignored --nocapture
