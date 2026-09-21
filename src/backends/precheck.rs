@@ -16,6 +16,19 @@ use crate::{AsrError, StreamingConfig};
 #[cfg(feature = "vad-silero")]
 use crate::{OfflineFamily, SpeechHints, TransducerBiasConfig};
 
+/// Recognizer thread-count rule shared by [`streaming`] and [`offline`]:
+/// `1..=MAX_NUM_THREADS`. Runs before any filesystem access so a bad value
+/// fails without a model on disk.
+fn validate_num_threads(num_threads: usize) -> Result<(), AsrError> {
+    if num_threads == 0 || num_threads > crate::MAX_NUM_THREADS {
+        return Err(AsrError::invalid(format!(
+            "num_threads must be between 1 and {}",
+            crate::MAX_NUM_THREADS
+        )));
+    }
+    Ok(())
+}
+
 /// Matches the stage `punct::create` reports for the same layout failure, so
 /// precheck does not change observable error semantics.
 /// Cheap precheck of a [`StreamingConfig`]: hotword bias syntax, model
@@ -24,6 +37,7 @@ use crate::{OfflineFamily, SpeechHints, TransducerBiasConfig};
 /// which `Engine::prepare`'s streaming arm applies the same checks.
 #[cfg(feature = "backend-sherpa")]
 pub(crate) fn streaming(config: &StreamingConfig) -> Result<(), AsrError> {
+    validate_num_threads(config.num_threads)?;
     let files = super::model_layout::find_model_files(&config.model_dir).map_err(model_error)?;
     if let Some(bias) = &config.bias {
         super::hotwords::prepare_bias(bias, &files)?;
@@ -116,6 +130,7 @@ pub(crate) fn validate_family_parameters(
 /// `Engine::prepare`'s offline arm applies them.
 #[cfg(all(feature = "backend-sherpa", feature = "vad-silero"))]
 pub(crate) fn offline(config: &crate::OfflineConfig) -> Result<(), AsrError> {
+    validate_num_threads(config.num_threads)?;
     // The cheap half of prepare's `vad::preflight`; the native detector is
     // still built once in prepare.
     super::vad::validate(&config.vad)?;

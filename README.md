@@ -216,6 +216,10 @@ cargo run --no-default-features --features backend-sherpa,vad-silero,punct-sherp
 # 本地转写 + 热词偏置（英文模型需归档自带 bpe.vocab）
 cargo run --no-default-features --features backend-sherpa --example transcribe_file -- MODEL_DIR speech.wav --hotwords "语音识别,张三"
 
+# 调整识别线程数（默认 2；单会话文件转写可按机器核数调大换吞吐/延迟，
+# 引擎配置字段 num_threads 的取值范围 1–256）
+cargo run --no-default-features --features backend-sherpa --example transcribe_file -- MODEL_DIR speech.wav --threads 4
+
 # 显式流式提交；展示 try_push 遇到背压后保留原块并限期重试
 cargo run --no-default-features --features backend-sherpa --example streaming -- MODEL_DIR speech.wav
 

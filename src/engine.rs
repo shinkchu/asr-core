@@ -67,8 +67,11 @@ fn load(
             // Cheap parameter/layout checks before native initialization;
             // utils::precheck delegates to the same functions.
             super::backends::precheck::streaming(config)?;
-            let (recognizer, words, vocabulary) =
-                super::backends::local::load_stream(&config.model_dir, config.bias.as_ref())?;
+            let (recognizer, words, vocabulary) = super::backends::local::load_stream(
+                &config.model_dir,
+                config.bias.as_ref(),
+                config.num_threads,
+            )?;
             let punctuator = load_punctuator(&config.punctuation)?;
             let supports_session_hints = config.bias.is_some();
             Ok((
@@ -100,6 +103,7 @@ fn load(
                 config.language.as_deref(),
                 config.transducer_bias.as_ref(),
                 config.prompt_hints.as_ref(),
+                config.num_threads,
             )?;
             let punctuator = load_punctuator(&config.punctuation)?;
             let supports_session_hints =

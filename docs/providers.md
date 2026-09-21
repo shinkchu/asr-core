@@ -102,17 +102,19 @@ URL 前缀 `https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-
 
 ## JSON 示例
 
-本地流式（`punctuation`、`bias` 可选）：
+本地流式（`punctuation`、`bias`、`num_threads` 可选）：
 
 ```json
-{"Streaming":{"model_dir":"/path/to/model","punctuation":{"model":"/path/to/punctuation"},"bias":{"phrases":[{"phrase":"语音识别","score":null},{"phrase":"张三","score":3.5}],"default_score":2.0,"modeling_unit":null}}}
+{"Streaming":{"model_dir":"/path/to/model","punctuation":{"model":"/path/to/punctuation"},"bias":{"phrases":[{"phrase":"语音识别","score":null},{"phrase":"张三","score":3.5}],"default_score":2.0,"modeling_unit":null},"num_threads":2}}
 ```
 
-离线：
+离线（`num_threads` 同样可选）：
 
 ```json
-{"Offline":{"model_dir":"/path/to/model","family":"SenseVoice","vad":{"model":"/path/to/silero_vad.onnx","threshold":0.5,"min_silence":0.5,"min_speech":0.25,"max_speech":15.0}}}
+{"Offline":{"model_dir":"/path/to/model","family":"SenseVoice","vad":{"model":"/path/to/silero_vad.onnx","threshold":0.5,"min_silence":0.5,"min_speech":0.25,"max_speech":15.0},"num_threads":2}}
 ```
+
+`num_threads` 为识别器 ONNX 推理线程数，默认与上限即公共常量 `asr_core::DEFAULT_NUM_THREADS`（2）与 `asr_core::MAX_NUM_THREADS`（256）；宿主方自行暴露线程配置项时锚定这两个常量，即可与库默认保持一致。VAD 与标点模型的线程数固定，不随此字段变化。识别器跨并发会话共享，多会话下的总线程占用约为 `num_threads × 并发会话数`，按机器核数与延迟需求权衡。
 
 HTTP（未列出的可选字段使用构造器同款默认值；密钥始终由宿主注入）：
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::ErrorKind;
+use crate::{ErrorKind, DEFAULT_NUM_THREADS};
 
 #[test]
 fn ambiguous_model_candidates_surface_as_invalid_model() {
@@ -14,7 +14,7 @@ fn ambiguous_model_candidates_surface_as_invalid_model() {
         std::fs::write(dir.path().join(name), [1u8; 8]).unwrap();
     }
 
-    let error = match load_stream(dir.path(), None) {
+    let error = match load_stream(dir.path(), None, DEFAULT_NUM_THREADS) {
         Ok(_) => panic!("ambiguous model layout must fail before native initialization"),
         Err(error) => error,
     };
@@ -37,7 +37,7 @@ fn empty_bpe_vocabulary_surfaces_as_invalid_model() {
     }
     std::fs::write(dir.path().join("bpe.vocab"), []).unwrap();
 
-    let error = match load_stream(dir.path(), None) {
+    let error = match load_stream(dir.path(), None, DEFAULT_NUM_THREADS) {
         Ok(_) => panic!("empty bpe.vocab must fail before native initialization"),
         Err(error) => error,
     };
@@ -54,7 +54,14 @@ fn offline_family_precheck_fires_before_native_initialization() {
     std::fs::write(dir.path().join("model.int8.onnx"), [1u8; 8]).unwrap();
     std::fs::write(dir.path().join("tokens.txt"), "foo 1\n<|zh|> 2\n").unwrap();
 
-    let error = match load_offline(dir.path(), OfflineFamily::Paraformer, None, None, None) {
+    let error = match load_offline(
+        dir.path(),
+        OfflineFamily::Paraformer,
+        None,
+        None,
+        None,
+        DEFAULT_NUM_THREADS,
+    ) {
         Ok(_) => panic!("marked tokens must reject a Paraformer configuration"),
         Err(error) => error,
     };
@@ -62,7 +69,14 @@ fn offline_family_precheck_fires_before_native_initialization() {
     assert!(error.message.contains("SenseVoice language markers"));
 
     // FireRedAsrCtc 走同一"单 onnx + tokens"布局发现与矛盾守卫。
-    let error = match load_offline(dir.path(), OfflineFamily::FireRedAsrCtc, None, None, None) {
+    let error = match load_offline(
+        dir.path(),
+        OfflineFamily::FireRedAsrCtc,
+        None,
+        None,
+        None,
+        DEFAULT_NUM_THREADS,
+    ) {
         Ok(_) => panic!("marked tokens must reject a FireRedAsrCtc configuration"),
         Err(error) => error,
     };
@@ -73,7 +87,14 @@ fn offline_family_precheck_fires_before_native_initialization() {
     let aed = tempfile::tempdir().unwrap();
     std::fs::write(aed.path().join("encoder.int8.onnx"), [1u8; 8]).unwrap();
     std::fs::write(aed.path().join("tokens.txt"), "foo 1\n").unwrap();
-    let error = match load_offline(aed.path(), OfflineFamily::FireRedAsrAed, None, None, None) {
+    let error = match load_offline(
+        aed.path(),
+        OfflineFamily::FireRedAsrAed,
+        None,
+        None,
+        None,
+        DEFAULT_NUM_THREADS,
+    ) {
         Ok(_) => panic!("missing decoder must fail before native initialization"),
         Err(error) => error,
     };

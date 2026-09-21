@@ -16,6 +16,7 @@ use std::{path::Path, sync::Arc};
 pub(crate) fn load_stream(
     dir: &Path,
     bias: Option<&TransducerBiasConfig>,
+    num_threads: usize,
 ) -> Result<(Arc<OnlineRecognizer>, Option<String>, HotwordVocabulary), AsrError> {
     let files = super::model_layout::find_model_files(dir).map_err(model_error)?;
     let mut c = OnlineRecognizerConfig::default();
@@ -23,7 +24,7 @@ pub(crate) fn load_stream(
     c.model_config.transducer.decoder = Some(files.decoder.to_string_lossy().into_owned());
     c.model_config.transducer.joiner = Some(files.joiner.to_string_lossy().into_owned());
     c.model_config.tokens = Some(files.tokens.to_string_lossy().into_owned());
-    c.model_config.num_threads = 2;
+    c.model_config.num_threads = num_threads as i32;
     c.model_config.provider = Some("cpu".into());
     let mut vocabulary = HotwordVocabulary::empty();
     let words = match bias {
@@ -61,12 +62,13 @@ pub(crate) fn load_offline(
     language: Option<&str>,
     bias: Option<&TransducerBiasConfig>,
     prompt_hints: Option<&SpeechHints>,
+    num_threads: usize,
 ) -> Result<(Arc<OfflineRecognizer>, Option<String>, HotwordVocabulary), AsrError> {
     // 家族能力规则（language/bias/prompt_hints 的取舍）唯一归宿在
     // backends::precheck，Engine::prepare 与 utils::precheck 共用。
     super::precheck::validate_family_parameters(family, language, bias, prompt_hints)?;
     let mut c = OfflineRecognizerConfig::default();
-    c.model_config.num_threads = 2;
+    c.model_config.num_threads = num_threads as i32;
     c.model_config.provider = Some("cpu".into());
     let mut words = None;
     let mut vocabulary = HotwordVocabulary::empty();

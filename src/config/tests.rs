@@ -103,6 +103,24 @@ fn concrete_local_configs_have_minimal_0_4_json() {
         vec!["骨质疏松症患者"]
     );
 
+    // num_threads:显式值覆盖 serde 默认;缺省默认(2)已由上方最小 JSON
+    // 与构造器的相等断言覆盖。
+    let threaded: EngineConfig =
+        serde_json::from_str(r#"{"Streaming":{"model_dir":"/m","num_threads":4}}"#).unwrap();
+    let EngineConfig::Streaming(threaded) = threaded else {
+        panic!("wrong variant")
+    };
+    assert_eq!(threaded.num_threads, 4);
+
+    let threaded: EngineConfig = serde_json::from_str(
+        r#"{"Offline":{"model_dir":"/m","family":"SenseVoice","vad":{"model":"/v"},"num_threads":8}}"#,
+    )
+    .unwrap();
+    let EngineConfig::Offline(threaded) = threaded else {
+        panic!("wrong variant")
+    };
+    assert_eq!(threaded.num_threads, 8);
+
     for (family_json, family) in [
         ("FireRedAsrAed", OfflineFamily::FireRedAsrAed),
         ("FireRedAsrCtc", OfflineFamily::FireRedAsrCtc),
@@ -116,6 +134,27 @@ fn concrete_local_configs_have_minimal_0_4_json() {
             EngineConfig::Offline(OfflineConfig::new("/m", family, VadConfig::new("/v")))
         );
     }
+}
+
+/// 默认值回归锚点：默认线程数是对外行为，直接断言字面值 2。不与构造器
+/// 互相印证——同时改 serde default 与 `new()` 时，相等断言仍会通过。
+#[test]
+fn num_threads_defaults_to_two_in_minimal_json() {
+    let streaming: EngineConfig =
+        serde_json::from_str(r#"{"Streaming":{"model_dir":"/m"}}"#).unwrap();
+    let EngineConfig::Streaming(streaming) = streaming else {
+        panic!("wrong variant")
+    };
+    assert_eq!(streaming.num_threads, 2);
+
+    let offline: EngineConfig = serde_json::from_str(
+        r#"{"Offline":{"model_dir":"/m","family":"SenseVoice","vad":{"model":"/v"}}}"#,
+    )
+    .unwrap();
+    let EngineConfig::Offline(offline) = offline else {
+        panic!("wrong variant")
+    };
+    assert_eq!(offline.num_threads, 2);
 }
 
 #[test]

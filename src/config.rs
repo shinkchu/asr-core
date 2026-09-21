@@ -228,6 +228,21 @@ fn default_bias_score() -> f32 {
     2.0
 }
 
+/// Default recognizer ONNX inference threads: conservative so several
+/// concurrent sessions stay within a typical core count. Hosts exposing
+/// their own thread knob can anchor on this value to keep their default
+/// in sync with [`StreamingConfig`] / [`OfflineConfig`].
+pub const DEFAULT_NUM_THREADS: usize = 2;
+
+/// Upper bound for recognizer `num_threads`, enforced by
+/// [`crate::utils::precheck::validate`] and `Engine::prepare`; also keeps
+/// the `usize -> i32` handoff to sherpa-onnx overflow-free.
+pub const MAX_NUM_THREADS: usize = 256;
+
+fn default_num_threads() -> usize {
+    DEFAULT_NUM_THREADS
+}
+
 /// Transducer-only decoding bias. Configuring it selects modified beam search
 /// and enables per-session [`SpeechHints`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -256,6 +271,10 @@ pub struct StreamingConfig {
     pub punctuation: Option<PunctConfig>,
     /// Transducer decoding bias; also enables per-session speech hints.
     pub bias: Option<TransducerBiasConfig>,
+    /// Recognizer ONNX inference threads; VAD and punctuation models keep
+    /// their own fixed settings.
+    #[serde(default = "default_num_threads")]
+    pub num_threads: usize,
 }
 
 impl StreamingConfig {
@@ -264,6 +283,7 @@ impl StreamingConfig {
             model_dir: model_dir.into(),
             punctuation: None,
             bias: None,
+            num_threads: default_num_threads(),
         }
     }
 }
@@ -280,6 +300,10 @@ pub struct OfflineConfig {
     pub transducer_bias: Option<TransducerBiasConfig>,
     /// Engine-level prompt phrases for Qwen3-ASR and FunASR-Nano.
     pub prompt_hints: Option<SpeechHints>,
+    /// Recognizer ONNX inference threads; VAD and punctuation models keep
+    /// their own fixed settings.
+    #[serde(default = "default_num_threads")]
+    pub num_threads: usize,
 }
 
 impl OfflineConfig {
@@ -292,6 +316,7 @@ impl OfflineConfig {
             punctuation: None,
             transducer_bias: None,
             prompt_hints: None,
+            num_threads: default_num_threads(),
         }
     }
 }

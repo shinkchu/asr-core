@@ -107,6 +107,49 @@ fn validate_offline_enforces_family_contradiction_and_vad_presence() {
     assert_eq!(error.kind, ErrorKind::InvalidModel);
 }
 
+/// num_threads is a pure value check that fires before any filesystem
+/// access; the fixtures are complete valid layouts so a bad thread count is
+/// the only thing wrong with each config.
+#[cfg(feature = "backend-sherpa")]
+#[test]
+fn validate_rejects_out_of_range_num_threads() {
+    let (_guard, path) = transducer_dir("a 1\n");
+    for bad in [0usize, crate::MAX_NUM_THREADS + 1] {
+        let mut config = crate::StreamingConfig::new(&path);
+        config.num_threads = bad;
+        let error = validate(&EngineConfig::Streaming(config.clone())).unwrap_err();
+        assert_eq!(
+            error.kind,
+            ErrorKind::InvalidInput,
+            "streaming {bad}: {error}"
+        );
+        assert!(error.message.contains("num_threads"), "{error}");
+        assert_precheck_matches_prepare(EngineConfig::Streaming(config));
+    }
+    #[cfg(feature = "vad-silero")]
+    {
+        let (_guard, path) = flat_dir("foo 1\n<|zh|> 2\n");
+        let vad_path = path.join("silero_vad.onnx");
+        std::fs::write(&vad_path, [0u8; 8]).unwrap();
+        for bad in [0usize, crate::MAX_NUM_THREADS + 1] {
+            let mut config = crate::OfflineConfig::new(
+                &path,
+                crate::OfflineFamily::SenseVoice,
+                crate::VadConfig::new(&vad_path),
+            );
+            config.num_threads = bad;
+            let error = validate(&EngineConfig::Offline(config.clone())).unwrap_err();
+            assert_eq!(
+                error.kind,
+                ErrorKind::InvalidInput,
+                "offline {bad}: {error}"
+            );
+            assert!(error.message.contains("num_threads"), "{error}");
+            assert_precheck_matches_prepare(EngineConfig::Offline(config));
+        }
+    }
+}
+
 #[cfg(feature = "backend-dashscope")]
 #[test]
 fn validate_delegates_cloud_parameter_checks() {

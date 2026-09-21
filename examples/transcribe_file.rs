@@ -7,7 +7,7 @@ use asr_core::{
     utils::models::{detect, LocalModel},
     AudioChunk, BiasPhrase, Engine, EngineConfig, EngineOptions, OfflineConfig, OfflineFamily,
     PunctConfig, SessionOptions, StreamingConfig, Subscription, TransducerBiasConfig, Update,
-    VadConfig,
+    VadConfig, DEFAULT_NUM_THREADS, MAX_NUM_THREADS,
 };
 use std::{
     error::Error,
@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut vad: Option<PathBuf> = None;
     let mut max_duration_secs: Option<u64> = None;
     let mut deadline_secs: Option<u64> = None;
+    let mut threads: Option<usize> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--hotwords" {
@@ -35,19 +36,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             max_duration_secs = Some(flag_seconds("--max-duration", args.next())?);
         } else if arg == "--deadline" {
             deadline_secs = Some(flag_seconds("--deadline", args.next())?);
+        } else if arg == "--threads" {
+            threads = Some(flag_threads(args.next())?);
         } else {
             positional.push(arg);
         }
     }
     if positional.len() != 2 && positional.len() != 3 {
         return Err(
-            "usage: transcribe_file MODEL_DIRECTORY AUDIO.wav [PUNCTUATION_MODEL_DIRECTORY] [--hotwords WORD1,WORD2,...] [--vad silero_vad.onnx] [--max-duration SECONDS] [--deadline SECONDS]"
+            "usage: transcribe_file MODEL_DIRECTORY AUDIO.wav [PUNCTUATION_MODEL_DIRECTORY] [--hotwords WORD1,WORD2,...] [--vad silero_vad.onnx] [--max-duration SECONDS] [--deadline SECONDS] [--threads N]"
                 .into(),
         );
     }
     let audio = read_wav_pcm16(&positional[1])?;
     let model_dir = PathBuf::from(&positional[0]);
     let punctuation = positional.get(2).map(|dir| PunctConfig::new(dir.clone()));
+    let threads = threads.unwrap_or(DEFAULT_NUM_THREADS);
     let config = match detect(&model_dir)? {
         // transducer 布局（encoder/decoder/joiner）走流式识别；离线 transducer
         // 意图须用 transcribe 示例的 JSON 配置显式指定 OfflineFamily::Transducer。
@@ -60,6 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 punctuation,
                 // 引擎级热词：启用 modified_beam_search 并对所有会话生效。
                 bias: (!hotwords.is_empty()).then(|| TransducerBiasConfig::new(hotwords)),
+                num_threads: threads,
             })
         }
         family => {
@@ -74,6 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 punctuation,
                 transducer_bias: None,
                 prompt_hints: None,
+                num_threads: threads,
             })
         }
     };
@@ -196,6 +202,20 @@ fn flag_seconds(flag: &str, value: Option<String>) -> Result<u64, Box<dyn Error>
         return Err(format!("{flag} must be greater than zero").into());
     }
     Ok(secs)
+}
+
+/// "--threads N" 解析：值缺失、非整数、超范围均在 CLI 层报错——范围与库的
+/// precheck 同一份上限（MAX_NUM_THREADS），不让无效值走到 wav 读取与模型
+/// 准备之后。
+fn flag_threads(value: Option<String>) -> Result<usize, Box<dyn Error>> {
+    let value = value.ok_or("--threads requires a value")?;
+    let threads = value
+        .parse()
+        .map_err(|_| format!("--threads expects a whole number of threads, got {value:?}"))?;
+    if !(1..=MAX_NUM_THREADS).contains(&threads) {
+        return Err(format!("--threads must be between 1 and {MAX_NUM_THREADS}").into());
+    }
+    Ok(threads)
 }
 
 /// 目录布局 → 离线家族。流式家族已在调用方分流，这里只裁决可判定的

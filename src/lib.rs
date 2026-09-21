@@ -23,7 +23,8 @@ pub use audio::{AudioBuffer, AudioChunk, AudioSpec};
 pub use config::{
     BiasPhrase, DashScopeConfig, EngineConfig, HttpMode, HttpResponse, OfflineConfig,
     OfflineFamily, OpenAiHttpConfig, OpenAiRealtimeConfig, PunctConfig, Secret, SessionOptions,
-    SpeechHints, StreamingConfig, Timeouts, TransducerBiasConfig, VadConfig,
+    SpeechHints, StreamingConfig, Timeouts, TransducerBiasConfig, VadConfig, DEFAULT_NUM_THREADS,
+    MAX_NUM_THREADS,
 };
 pub use coordinator::{AudioInput, PushError, Session, Subscription};
 pub use engine::{Engine, EngineOptions};
