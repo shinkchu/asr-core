@@ -78,10 +78,10 @@ jobs:
       - name: Test documentation
         run: cargo test --locked ${{ matrix.args }} --doc
 
-  native:
-    name: Native (macOS Intel)
-    runs-on: macos-15-intel
-    timeout-minutes: 60
+  native-combos:
+    name: Native feature combos
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -89,19 +89,47 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            pkg-config
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.1
-        with:
-          components: clippy
+
+      - name: Resolve sherpa-onnx version
+        id: sherpa
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(grep -A1 '^name = "sherpa-onnx-sys"' Cargo.lock | grep '^version' | cut -d '"' -f2)"
+          if [ -z "$version" ]; then
+            echo "Failed to resolve sherpa-onnx-sys version from Cargo.lock." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: native-macos-intel
-          # sherpa-onnx stores downloaded native libraries under target/.
-          # rust-cache prunes those libraries while leaving their directory
-          # behind, which makes sherpa-onnx skip the next download.
-          cache-targets: false
+          shared-key: native-combos
+
+      # sherpa-onnx-sys skips its download when
+      # target/sherpa-onnx-prebuilt/<archive>/lib exists. rust-cache prunes
+      # the library files while keeping the directories, which would make
+      # later builds skip the download and fail to link, so the prebuilt
+      # libraries are cached separately: restored after rust-cache, and
+      # saved by an explicit step so rust-cache's post-step cleanup can
+      # never archive the pruned directory.
+      - name: Restore sherpa-onnx prebuilt libraries
+        uses: actions/cache/restore@v6
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
       - name: Test standalone native features
         shell: bash
@@ -129,14 +157,70 @@ jobs:
               --doc
           done
 
-      - name: Clippy all features
-        run: cargo clippy --locked --all-features --all-targets -- -D warnings
+      # Saved only after the whole job succeeds, so a run cancelled
+      # mid-extraction cannot archive a partial library set under this
+      # key (the exact key is never overwritten). Saving is skipped
+      # harmlessly (continue-on-error) when the key already exists.
+      - name: Save sherpa-onnx prebuilt libraries
+        uses: actions/cache/save@v6
+        continue-on-error: true
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
+
+  native:
+    name: Native (macOS ARM)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Resolve sherpa-onnx version
+        id: sherpa
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(grep -A1 '^name = "sherpa-onnx-sys"' Cargo.lock | grep '^version' | cut -d '"' -f2)"
+          if [ -z "$version" ]; then
+            echo "Failed to resolve sherpa-onnx-sys version from Cargo.lock." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-macos-arm
+
+      # See native-combos for why the sherpa-onnx prebuilt libraries are
+      # cached separately from the target directory.
+      - name: Restore sherpa-onnx prebuilt libraries
+        uses: actions/cache/restore@v6
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
       - name: Test all features
         run: cargo test --locked --all-features --all-targets
 
       - name: Test all-feature documentation
         run: cargo test --locked --all-features --doc
+
+      - name: Save sherpa-onnx prebuilt libraries
+        uses: actions/cache/save@v6
+        continue-on-error: true
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
   native-linux:
     name: Native (Linux)
@@ -161,13 +245,32 @@ jobs:
         with:
           components: clippy
 
+      - name: Resolve sherpa-onnx version
+        id: sherpa
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(grep -A1 '^name = "sherpa-onnx-sys"' Cargo.lock | grep '^version' | cut -d '"' -f2)"
+          if [ -z "$version" ]; then
+            echo "Failed to resolve sherpa-onnx-sys version from Cargo.lock." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: native-linux
-          # See the macOS job: target caching can leave an incomplete
-          # sherpa-onnx prebuilt directory and break the native link step.
-          cache-targets: false
+
+      # See native-combos for why the sherpa-onnx prebuilt libraries are
+      # cached separately from the target directory.
+      - name: Restore sherpa-onnx prebuilt libraries
+        uses: actions/cache/restore@v6
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
       - name: Test capture
         run: |
@@ -200,6 +303,13 @@ jobs:
             --all-targets \
             -- \
             -D warnings
+
+      - name: Save sherpa-onnx prebuilt libraries
+        uses: actions/cache/save@v6
+        continue-on-error: true
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
   package:
     name: Package
@@ -237,6 +347,7 @@ jobs:
     needs:
       - format
       - features
+      - native-combos
       - native
       - native-linux
       - package
@@ -246,18 +357,21 @@ jobs:
         env:
           FORMAT_RESULT: ${{ needs.format.result }}
           FEATURES_RESULT: ${{ needs.features.result }}
+          NATIVE_COMBOS_RESULT: ${{ needs.native-combos.result }}
           NATIVE_RESULT: ${{ needs.native.result }}
           NATIVE_LINUX_RESULT: ${{ needs.native-linux.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
         run: |
           echo "format=$FORMAT_RESULT"
           echo "features=$FEATURES_RESULT"
+          echo "native-combos=$NATIVE_COMBOS_RESULT"
           echo "native=$NATIVE_RESULT"
           echo "native-linux=$NATIVE_LINUX_RESULT"
           echo "package=$PACKAGE_RESULT"
 
           test "$FORMAT_RESULT" = "success"
           test "$FEATURES_RESULT" = "success"
+          test "$NATIVE_COMBOS_RESULT" = "success"
           test "$NATIVE_RESULT" = "success"
           test "$NATIVE_LINUX_RESULT" = "success"
           test "$PACKAGE_RESULT" = "success"
