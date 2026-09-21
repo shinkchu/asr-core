@@ -201,8 +201,12 @@ let snapshot = manager.wait(generation, Instant::now() + Duration::from_secs(30)
 # OpenAI-compatible HTTP 后端
 cargo run --no-default-features --features backend-openai-http --example transcribe -- CONFIG.json speech.wav
 
-# 本地 sherpa-onnx 文件转写
+# 本地 sherpa-onnx 文件转写（流式 transducer 目录）
 cargo run --no-default-features --features backend-sherpa --example transcribe_file -- MODEL_DIR speech.wav
+
+# 本地离线转写（按目录自动识别 SenseVoice / FireRedASR2-AED / Qwen3-ASR / FunASR-Nano；--vad 为 silero VAD 模型文件。
+# Paraformer、FireRedASR-CTC 与无标记 SenseVoice 共享扁平布局，无法自动区分，须用 transcribe 示例的 JSON 配置显式指定家族）
+cargo run --no-default-features --features backend-sherpa,vad-silero --example transcribe_file -- MODEL_DIR speech.wav --vad silero_vad.onnx
 
 # 本地转写 + 标点恢复（第三个参数为标点模型目录）
 cargo run --no-default-features --features backend-sherpa,punct-sherpa --example transcribe_file -- MODEL_DIR speech.wav PUNCT_DIR
