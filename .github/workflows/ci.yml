@@ -125,13 +125,11 @@ jobs:
       # libraries are cached separately: restored after rust-cache, and
       # saved by an explicit step so rust-cache's post-step cleanup can
       # never archive the pruned directory.
-      # Each job caches its own static/shared set; an older static-only
-      # cache must not mask pruned shared-library directories.
       - name: Restore sherpa-onnx prebuilt libraries
         uses: actions/cache/restore@v6
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
       - name: Test standalone native features
         shell: bash
@@ -169,7 +167,7 @@ jobs:
         continue-on-error: true
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
   native:
     name: Native (macOS ARM)
@@ -210,7 +208,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
       - name: Test all features
         run: cargo test --locked --all-features --all-targets
@@ -247,7 +245,7 @@ jobs:
         continue-on-error: true
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
   native-linux:
     name: Native (Linux)
@@ -297,7 +295,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
       - name: Test capture
         run: |
@@ -336,7 +334,7 @@ jobs:
         continue-on-error: true
         with:
           path: target/sherpa-onnx-prebuilt
-          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}-link-modes-v2-${{ github.job }}
+          key: sherpa-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.sherpa.outputs.version }}
 
   package:
     name: Package

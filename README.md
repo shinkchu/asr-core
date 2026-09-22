@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 本地流式与离线识别可通过 `provider` 选择执行设备，默认 `cpu`，旧 JSON 配置可继续使用：
 
-```rust
+```rust,no_run
 use asr_core::{ExecutionProvider, StreamingConfig};
 let mut config = StreamingConfig::new("/path/to/model");
 config.provider = ExecutionProvider::Cuda; // NVIDIA；Apple 使用 CoreMl
